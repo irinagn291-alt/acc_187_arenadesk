@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "zone-lounge.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

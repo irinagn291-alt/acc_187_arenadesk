@@ -1,0 +1,196 @@
+---
+format_version: "23"
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+project_type: ios
+app:
+  envs:
+  - TEST_SHARD_COUNT: "2"
+  - APP_FACTORY_PROJECT_PATH: "Arenadesk.xcodeproj"
+    opts:
+      is_expand: false
+  - APP_FACTORY_SCHEME: "Arenadesk"
+    opts:
+      is_expand: false
+  - BITRISE_DISTRIBUTION_METHOD: app-store
+    opts:
+      is_expand: false
+pipelines:
+  run_tests:
+    workflows:
+      build_for_testing: {}
+      test_without_building:
+        depends_on:
+        - build_for_testing
+        parallel: "$TEST_SHARD_COUNT"
+workflows:
+  archive_and_export_app:
+    summary: Run your Xcode tests and create an IPA file to install your app on a
+      device or share it with your team.
+    description: The workflow will first clone your Git repository, cache and
+      install your project's dependencies if any, run your Xcode tests, export
+      an IPA file from the project and save it.
+    steps:
+    - git-clone@8: {}
+    - script@1:
+        title: Git LFS pull
+        inputs:
+        - content: |
+            #!/bin/bash
+            set -euo pipefail
+            if [[ -f .gitattributes ]] && command -v git-lfs >/dev/null 2>&1; then
+              git lfs install
+              git lfs pull
+            fi
+    - script@1:
+        title: CocoaPods install
+        inputs:
+        - content: |
+            #!/bin/bash
+            set -euo pipefail
+            cd "$BITRISE_SOURCE_DIR"
+            if [ ! -f Podfile ]; then
+              echo "No Podfile — skipping CocoaPods"
+              exit 0
+            fi
+            pod install --repo-update
+            test -f "Pods/Target Support Files/Pods-UnityFramework/Pods-UnityFramework.release.xcconfig"
+    - script@1:
+        title: Prepare ASC key (.p8), modern .p12, relax pbxproj signing for App Store archive
+        inputs:
+        - content: |
+            #!/bin/bash
+            set -euo pipefail
+            # App Store Connect API key
+            echo "$ASC_API_KEY_CONTENT" | base64 -d > "$BITRISE_SOURCE_DIR/AuthKey_${ASC_KEY_ID}.p8"
+            # Source .p12 from secret; xcode-archive with api-key needs certificate_url_list and parses .p12
+            # with Go pkcs12 — RC2 from Keychain often breaks. Re-wrap PKCS#12 with OpenSSL on the runner.
+            ENC_P12="$BITRISE_SOURCE_DIR/app_factory_import.p12"
+            STEP_P12="$BITRISE_SOURCE_DIR/app_factory_step.p12"
+            PEM_TMP="$BITRISE_SOURCE_DIR/app_factory_tmp.pem"
+            echo "$P12_CONTENT_B64" | base64 -d > "$ENC_P12"
+            _to_pem() {
+              openssl pkcs12 "$@" -in "$ENC_P12" -nodes -passin "pass:${P12_PASSWORD}" -out "$PEM_TMP"
+            }
+            if _to_pem 2>/dev/null || _to_pem -legacy; then
+              openssl pkcs12 -export -in "$PEM_TMP" -out "$STEP_P12" -passout "pass:${P12_PASSWORD}"
+              rm -f "$PEM_TMP" "$ENC_P12"
+            else
+              echo "OpenSSL: failed to read .p12 (check P12_PASSWORD and file)" >&2
+              rm -f "$PEM_TMP" "$ENC_P12"
+              exit 1
+            fi
+            # If project.pbxproj pins CODE_SIGN_IDENTITY = Apple Development, archive requests
+            # iOS Development profiles (needs registered devices). Clear identity here.
+            # After manage-ios-code-signing the project gets a concrete profile; xcconfig must not
+            # force CODE_SIGN_STYLE=Automatic — that conflicts with a manual profile.
+            find "$BITRISE_SOURCE_DIR" -name project.pbxproj -print0 | while IFS= read -r -d '' PBX; do
+              echo "Relax code signing identity in $PBX"
+              perl -i -pe '
+                s/^(\s*CODE_SIGN_IDENTITY(?:\[[^\]]+\])?\s*=\s*)"Apple Development";/${1}"";/g;
+                s/^(\s*CODE_SIGN_IDENTITY(?:\[[^\]]+\])?\s*=\s*)Apple Development;/${1}"";/g;
+                s/^(\s*CODE_SIGN_IDENTITY(?:\[[^\]]+\])?\s*=\s*)"iPhone Developer";/${1}"";/g;
+              ' "$PBX"
+            done
+    - manage-ios-code-signing@2:
+        inputs:
+        - apple_service_connection: api-key
+        - distribution_method: app-store
+        - project_path: "Arenadesk.xcodeproj"
+        - scheme: "$APP_FACTORY_SCHEME"
+        - register_test_devices: "no"
+        - apple_team_id: "$APPLE_TEAM_ID"
+        - certificate_url_list: file://$BITRISE_SOURCE_DIR/app_factory_step.p12
+        - passphrase_list: $P12_PASSWORD
+        - api_key_path: "$BITRISE_SOURCE_DIR/AuthKey_${ASC_KEY_ID}.p8"
+        - api_key_id: "$ASC_KEY_ID"
+        - api_key_issuer_id: "$ASC_ISSUER_ID"
+    - xcode-archive@5:
+        inputs:
+        - project_path: "Arenadesk.xcodeproj"
+        - scheme: "$APP_FACTORY_SCHEME"
+        - distribution_method: "$BITRISE_DISTRIBUTION_METHOD"
+        - automatic_code_signing: api-key
+        - certificate_url_list: file://$BITRISE_SOURCE_DIR/app_factory_step.p12
+        - passphrase_list: $P12_PASSWORD
+        - api_key_path: "$BITRISE_SOURCE_DIR/AuthKey_${ASC_KEY_ID}.p8"
+        - api_key_id: "$ASC_KEY_ID"
+        - api_key_issuer_id: "$ASC_ISSUER_ID"
+        - export_development_team: "$APPLE_TEAM_ID"
+        - xcconfig_content: |-
+            COMPILER_INDEX_STORE_ENABLE = NO
+            DEVELOPMENT_TEAM = $APPLE_TEAM_ID
+        - cache_level: none
+    # IPA upload only (altool / App Store Connect) — no fastlane deliver, no metadata/pricing/territories
+    # API calls (fixes ASC errors like unknown relationship 'prices' / 'availableTerritories' from deliver).
+    - deploy-to-itunesconnect-application-loader@2:
+        inputs:
+        - connection: "off"
+        - ipa_path: "$BITRISE_IPA_PATH"
+        - api_key_path: "file://$BITRISE_SOURCE_DIR/AuthKey_${ASC_KEY_ID}.p8"
+        - api_issuer: "$ASC_ISSUER_ID"
+        - bundle_id: "$APP_BUNDLE_ID"
+    - deploy-to-bitrise-io@2: {}
+  build_for_testing:
+    steps:
+    - git-clone@8: {}
+    - script@1:
+        title: CocoaPods install
+        inputs:
+        - content: |
+            #!/bin/bash
+            set -euo pipefail
+            cd "$BITRISE_SOURCE_DIR"
+            [ -f Podfile ] && pod install --repo-update
+    - xcode-build-for-test@3:
+        inputs:
+        - project_path: "Arenadesk.xcodeproj"
+        - scheme: "$APP_FACTORY_SCHEME"
+        - destination: generic/platform=iOS Simulator
+        - cache_level: none
+    - xcode-test-shard-calculation@0:
+        inputs:
+        - shard_count: "$TEST_SHARD_COUNT"
+        - product_path: "$BITRISE_XCTESTRUN_FILE_PATH"
+    - deploy-to-bitrise-io@2:
+        inputs:
+        - pipeline_intermediate_files: |-
+            BITRISE_TEST_SHARDS_PATH
+            BITRISE_TEST_BUNDLE_PATH
+  run_tests:
+    summary: Run your Xcode tests and get the test report.
+    description: The workflow will first clone your Git repository, cache and
+      install your project's dependencies if any, run your Xcode tests and save
+      the test results.
+    steps:
+    - git-clone@8: {}
+    - script@1:
+        title: CocoaPods install
+        inputs:
+        - content: |
+            #!/bin/bash
+            set -euo pipefail
+            cd "$BITRISE_SOURCE_DIR"
+            [ -f Podfile ] && pod install --repo-update
+    - xcode-test@6:
+        inputs:
+        - project_path: "Arenadesk.xcodeproj"
+        - scheme: "$APP_FACTORY_SCHEME"
+        - test_repetition_mode: retry_on_failure
+        - cache_level: none
+    - deploy-to-bitrise-io@2: {}
+    triggers:
+      push:
+      - branch: main
+      pull_request:
+      - source_branch: "*"
+  test_without_building:
+    steps:
+    - pull-intermediate-files@1: {}
+    - xcode-test-without-building@0:
+        inputs:
+        - only_testing: "$BITRISE_TEST_SHARDS_PATH/$BITRISE_IO_PARALLEL_INDEX"
+        - xctestrun: "$BITRISE_TEST_BUNDLE_PATH/all_tests.xctestrun"
+meta:
+  bitrise.io:
+    stack: osx-xcode-26.6.x
+    machine_type_id: g2.mac.large

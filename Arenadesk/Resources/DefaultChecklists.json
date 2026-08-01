@@ -1,0 +1,42 @@
+[
+  {
+    "name": "Shift Open",
+    "kind": "shiftOpen",
+    "items": [
+      { "text": "Count opening cash drawer", "isMandatory": true },
+      { "text": "Walk the floor and confirm seat power", "isMandatory": true },
+      { "text": "Check network uplink lights", "isMandatory": true },
+      { "text": "Review overnight incidents", "isMandatory": false },
+      { "text": "Confirm HVAC and lighting", "isMandatory": false }
+    ]
+  },
+  {
+    "name": "Shift Close",
+    "kind": "shiftClose",
+    "items": [
+      { "text": "End open seat sessions", "isMandatory": true },
+      { "text": "Count closing cash", "isMandatory": true },
+      { "text": "Log unresolved work for next shift", "isMandatory": true },
+      { "text": "Lock storage and admin desk", "isMandatory": false },
+      { "text": "Power down unused peripherals", "isMandatory": false }
+    ]
+  },
+  {
+    "name": "Cleaning",
+    "kind": "cleaning",
+    "items": [
+      { "text": "Wipe desks and keyboards", "isMandatory": true },
+      { "text": "Sanitize headsets", "isMandatory": true },
+      { "text": "Empty trash bins", "isMandatory": true }
+    ]
+  },
+  {
+    "name": "Maintenance",
+    "kind": "maintenance",
+    "items": [
+      { "text": "Dust PC filters", "isMandatory": true },
+      { "text": "Verify temperatures under load", "isMandatory": true },
+      { "text": "Check cable seating", "isMandatory": false }
+    ]
+  }
+]

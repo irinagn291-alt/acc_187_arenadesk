@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "tournaments-banner.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
